@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Chrome Time Tracker</title>
+
+    <link
+        rel="stylesheet"
+        href="/css/style.css"
+    >
+
+    <script
+        src="/js/app.js"
+        defer
+    ></script>
+</head>
+
+<body>
+    <main class="container">
+
+        <header class="page-header">
+            <div>
+                <p class="eyebrow">
+                    Chrome Time Tracker
+                </p>
+
+                <h1>
+                    Chrome使用時間
+                </h1>
+            </div>
+
+            <button
+                id="refreshButton"
+                class="refresh-button"
+                type="button"
+            >
+                更新
+            </button>
+        </header>
+
+        <section
+            class="date-controls"
+            aria-label="集計日を選択"
+        >
+            <button
+                id="previousDateButton"
+                class="date-button"
+                type="button"
+            >
+                ← 前日
+            </button>
+
+            <input
+                id="dateInput"
+                class="date-input"
+                type="date"
+                aria-label="集計日"
+            >
+
+            <button
+                id="nextDateButton"
+                class="date-button"
+                type="button"
+            >
+                翌日 →
+            </button>
+        </section>
+
+        <!-- 比較情報 -->
+        <section class="dashboard-grid">
+
+            <article class="total-card metric-card primary-metric">
+                <span class="metric-label">
+                    対象日の合計
+                </span>
+
+                <strong
+                    id="totalTime"
+                    class="metric-value"
+                >
+                    --時間 --分
+                </strong>
+
+                <span
+                    id="selectedDateText"
+                    class="metric-note"
+                >
+                    -
+                </span>
+            </article>
+
+            <article class="total-card metric-card">
+                <span class="metric-label">
+                    過去の同曜日中央値との差
+                </span>
+
+                <strong
+                    id="sameWeekdayDifference"
+                    class="metric-value comparison-value unavailable"
+                >
+                    比較データなし
+                </strong>
+
+                <span
+                    id="sameWeekdayDetail"
+                    class="metric-note"
+                >
+                    履歴がたまると表示されます
+                </span>
+            </article>
+
+            <article class="total-card metric-card">
+                <span class="metric-label">
+                    直近7日 vs 前7日
+                </span>
+
+                <strong
+                    id="sevenDayDifference"
+                    class="metric-value comparison-value unavailable"
+                >
+                    比較データなし
+                </strong>
+
+                <span
+                    id="sevenDayDetail"
+                    class="metric-note"
+                >
+                    履歴がたまると表示されます
+                </span>
+            </article>
+
+        </section>
+        
+        <!-- 増減要因 -->
+<section class="site-card analytics-panel">
+
+    <div class="section-header">
+        <div>
+            <h2>
+                前7日からの増減要因
+            </h2>
+
+            <p
+                id="changeDriversRange"
+                class="section-description"
+            >
+                直近7日と前7日を比較
+            </p>
+        </div>
+    </div>
+
+    <p
+        id="changeDriversUnavailable"
+        class="empty-message"
+        hidden
+    >
+        前7日の記録がないため、まだ比較できません🙂
+    </p>
+
+    <div
+        id="changeDriversContent"
+        class="change-drivers-grid"
+        hidden
+    >
+        <section>
+            <h3 class="change-column-title">
+                カテゴリー
+            </h3>
+
+            <div
+                id="categoryChangeList"
+                class="change-list"
+            ></div>
+        </section>
+
+        <section>
+            <h3 class="change-column-title">
+                サイト
+            </h3>
+
+            <div
+                id="siteChangeList"
+                class="change-list"
+            ></div>
+        </section>
+    </div>
+
+</section>
+
+        <!-- カテゴリー -->
+        <section class="site-card analytics-panel">
+
+            <div class="section-header">
+                <div>
+                    <h2>
+                        カテゴリー別
+                    </h2>
+
+                    <p class="section-description">
+                        その日の利用内容の構成
+                    </p>
+                </div>
+
+                <span
+                    id="categoryCount"
+                    class="site-count"
+                >
+                    0カテゴリー
+                </span>
+            </div>
+
+            <div
+                id="categoryList"
+                class="category-list"
+            ></div>
+
+            <p
+                id="categoryEmptyMessage"
+                class="empty-message"
+                hidden
+            >
+                この日のカテゴリー記録はありません🙂
+            </p>
+
+        </section>
+
+        <!-- 24時間グラフ -->
+        <section class="site-card analytics-panel">
+
+            <div class="section-header">
+                <div>
+                    <h2>
+                        24時間の利用分布
+                    </h2>
+
+                    <p class="section-description">
+                        1本の最大高さが60分です
+                    </p>
+                </div>
+            </div>
+
+            <div class="hourly-chart-scroll">
+                <div
+                    id="hourlyChart"
+                    class="hourly-chart"
+                    aria-label="24時間カテゴリー別使用時間"
+                ></div>
+            </div>
+
+            <p
+                id="hourlyDetail"
+                class="hourly-detail"
+            >
+                棒を選択すると、その時間帯の詳細を表示します。
+            </p>
+
+        </section>
+        
+        <!-- 1週間グラフ -->
+<section class="site-card analytics-panel">
+
+    <div class="section-header">
+        <div>
+            <h2>
+                1週間の利用分布
+            </h2>
+
+            <p
+                id="weeklyRange"
+                class="section-description"
+            >
+                日曜日〜土曜日
+            </p>
+        </div>
+    </div>
+
+    <div class="weekly-chart-scroll">
+        <div
+            id="weeklyChart"
+            class="weekly-chart"
+            aria-label="日曜日から土曜日までの利用時間"
+        ></div>
+    </div>
+
+    <p
+        id="weeklyDetail"
+        class="hourly-detail"
+    >
+        棒を選択すると、その日の詳細を表示します。
+    </p>
+
+</section>
+
+        <!-- サイト別 -->
+        <section class="site-card analytics-panel">
+
+            <div class="section-header">
+                <div>
+                    <h2>
+                        サイト別
+                    </h2>
+
+                    <p class="section-description">
+                        ドメイン単位の使用時間
+                    </p>
+                </div>
+
+                <span
+                    id="siteCount"
+                    class="site-count"
+                >
+                    0サイト
+                </span>
+            </div>
+
+            <div
+                id="siteList"
+                class="site-list"
+            ></div>
+
+            <p
+                id="emptyMessage"
+                class="empty-message"
+                hidden
+            >
+                この日の記録はありません🙂
+            </p>
+
+        </section>
+
+        <p
+            id="statusMessage"
+            class="status-message"
+            role="status"
+        ></p>
+
+    </main>
+</body>
+</html>

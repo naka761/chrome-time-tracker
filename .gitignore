@@ -1,0 +1,44 @@
+# Maven
+target/
+HELP.md
+
+# jpackage・配布物
+dist/
+release/
+package-input/
+*.exe
+*.msi
+
+# ログ
+logs/
+*.log
+
+# 秘密情報・ローカル設定
+.env
+.env.*
+application-local.properties
+*.dump
+*.backup
+*.csv
+
+# Eclipse / STS
+.classpath
+.factorypath
+.project
+.settings/
+bin/
+.apt_generated/
+.springBeans
+.sts4-cache/
+
+# IntelliJ IDEA / VS Code
+.idea/
+*.iml
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# JVM crash logs
+hs_err_pid*

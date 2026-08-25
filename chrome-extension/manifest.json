@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Chrome Time Tracker",
+  "version": "0.1.0",
+  "description": "アクティブなChromeタブのサイト別使用時間を記録します。",
+  "permissions": [
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:18080/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  }
+}
