@@ -20,6 +20,8 @@ application-local.properties
 *.dump
 *.backup
 *.csv
+backup/
+local-backup/
 
 # Eclipse / STS
 .classpath

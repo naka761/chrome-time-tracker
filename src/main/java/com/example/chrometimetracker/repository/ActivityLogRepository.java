@@ -8,7 +8,6 @@ import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import com.example.chrometimetracker.dto.SiteUsageResponse;
 import com.example.chrometimetracker.model.ActivityInterval;
 import com.example.chrometimetracker.model.ActivityLog;
 
@@ -38,7 +37,7 @@ public class ActivityLogRepository {
                     ended_at
                 FROM activity_log
                 WHERE ended_at IS NULL
-                ORDER BY started_at DESC
+                ORDER BY started_at DESC, id DESC
                 LIMIT 1
                 """;
 
@@ -86,118 +85,12 @@ public class ActivityLogRepository {
     }
 
     /**
-     * 計測中レコードの終了時刻を記録する。
-     *
-     * @param id      activity_logのID
-     * @param endedAt 終了時刻
-     */
-    public void closeActivity(
-            long id,
-            Instant endedAt
-    ) {
-        String sql = """
-                UPDATE activity_log
-                SET
-                    ended_at = ?,
-                    last_seen_at = ?
-                WHERE id = ?
-                  AND ended_at IS NULL
-                """;
-
-        Timestamp timestamp =
-                Timestamp.from(endedAt);
-
-        jdbcTemplate.update(
-                sql,
-                timestamp,
-                timestamp,
-                id
-        );
-    }
-
-    /**
-     * 指定された期間と重なるログを、
-     * サイトごとに秒数集計する。
-     *
-     * ended_atがnullの現在計測中レコードは、
-     * nowまで使用中として計算する。
-     *
-     * @param dayStart 対象日の開始時刻
-     * @param dayEnd   対象日の翌日開始時刻
-     * @param now      集計実行時刻
-     * @return サイト別使用時間
-     */
-    public List<SiteUsageResponse> findDailyUsage(
-            Instant dayStart,
-            Instant dayEnd,
-            Instant now
-    ) {
-        String sql = """
-                SELECT
-                    site,
-                    CAST(
-                        FLOOR(
-                            SUM(
-                                EXTRACT(
-                                    EPOCH FROM (
-                                        LEAST(
-                                            COALESCE(ended_at, ?),
-                                            ?
-                                        )
-                                        -
-                                        GREATEST(
-                                            started_at,
-                                            ?
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                        AS BIGINT
-                    ) AS seconds
-                FROM activity_log
-                WHERE started_at < ?
-                  AND COALESCE(ended_at, ?) > ?
-                GROUP BY site
-                ORDER BY seconds DESC, site ASC
-                """;
-
-        Timestamp nowTimestamp =
-                Timestamp.from(now);
-
-        Timestamp dayStartTimestamp =
-                Timestamp.from(dayStart);
-
-        Timestamp dayEndTimestamp =
-                Timestamp.from(dayEnd);
-
-        return jdbcTemplate.query(
-                sql,
-                (resultSet, rowNumber) ->
-                        new SiteUsageResponse(
-                                resultSet.getString("site"),
-                                resultSet.getLong("seconds")
-                        ),
-
-                /*
-                 * SQL内の「?」の順番どおりに渡す。
-                 */
-                nowTimestamp,
-                dayEndTimestamp,
-                dayStartTimestamp,
-                dayEndTimestamp,
-                nowTimestamp,
-                dayStartTimestamp
-        );
-    }
-    
-    /**
-     * 現在計測中のレコードを、指定時刻で終了する。
+     * 現在計測中の全レコードを、指定時刻で終了する。
      *
      * @param endedAt 終了時刻
      * @return 更新件数
      */
-    public int closeOpenActivities(
+    public int closeAllOpenActivities(
             Instant endedAt
     ) {
         String sql = """
@@ -268,20 +161,34 @@ public class ActivityLogRepository {
             Instant now
     ) {
         String sql = """
+                WITH ordered AS (
+                    SELECT
+                        id,
+                        site,
+                        started_at,
+                        COALESCE(ended_at, ?) AS effective_end,
+                        LAG(COALESCE(ended_at, ?)) OVER (
+                            ORDER BY started_at, id
+                        ) AS previous_effective_end
+                    FROM activity_log
+                    WHERE started_at < ?
+                )
                 SELECT
+                    id,
                     site,
                     started_at,
-                    COALESCE(ended_at, ?) AS effective_end
-                FROM activity_log
-                WHERE started_at < ?
-                  AND COALESCE(ended_at, ?) > ?
-                ORDER BY started_at
+                    effective_end
+                FROM ordered
+                WHERE effective_end > ?
+                   OR previous_effective_end > ?
+                ORDER BY started_at, id
                 """;
 
         return jdbcTemplate.query(
                 sql,
                 (resultSet, rowNumber) ->
                         new ActivityInterval(
+                                resultSet.getLong("id"),
                                 resultSet.getString("site"),
                                 resultSet
                                         .getTimestamp("started_at")
@@ -291,8 +198,9 @@ public class ActivityLogRepository {
                                         .toInstant()
                         ),
                 Timestamp.from(now),
-                Timestamp.from(rangeEnd),
                 Timestamp.from(now),
+                Timestamp.from(rangeEnd),
+                Timestamp.from(rangeStart),
                 Timestamp.from(rangeStart)
         );
     }

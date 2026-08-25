@@ -2,10 +2,15 @@ package com.example.chrometimetracker.service;
 
 import java.time.Instant;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -19,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.example.chrometimetracker.dto.DailySummaryResponse;
 import com.example.chrometimetracker.dto.SiteUsageResponse;
+import com.example.chrometimetracker.model.ActivityInterval;
 import com.example.chrometimetracker.model.ActivityLog;
 import com.example.chrometimetracker.repository.ActivityLogRepository;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -35,11 +41,14 @@ public class TrackerService {
     private static final int MAX_SITE_LENGTH = 255;
 
     private final ActivityLogRepository activityLogRepository;
+    private final ActivityIntervalNormalizer intervalNormalizer;
 
     public TrackerService(
-            ActivityLogRepository activityLogRepository
+            ActivityLogRepository activityLogRepository,
+            ActivityIntervalNormalizer intervalNormalizer
     ) {
         this.activityLogRepository = activityLogRepository;
+        this.intervalNormalizer = intervalNormalizer;
     }
 
     /**
@@ -83,10 +92,10 @@ public class TrackerService {
             }
 
             /*
-             * 現在のサイトを終了する。
+             * 異常データで複数行が未終了でも、
+             * 切替時刻ですべて終了する。
              */
-            activityLogRepository.closeActivity(
-                    currentActivity.id(),
+            activityLogRepository.closeAllOpenActivities(
                     observedAt
             );
         }
@@ -131,11 +140,50 @@ public class TrackerService {
                 .atStartOfDay(zoneId)
                 .toInstant();
 
+        Instant now = Instant.now();
+
+        List<ActivityInterval> intervals =
+                intervalNormalizer.normalize(
+                        activityLogRepository.findIntervals(
+                                dayStart,
+                                dayEnd,
+                                now
+                        )
+                );
+
+        Map<String, Long> siteMillis =
+                new HashMap<>();
+
+        for (ActivityInterval interval : intervals) {
+            Instant clippedStart =
+                    interval.startedAt().isAfter(dayStart)
+                            ? interval.startedAt()
+                            : dayStart;
+
+            Instant clippedEnd =
+                    interval.endedAt().isBefore(dayEnd)
+                            ? interval.endedAt()
+                            : dayEnd;
+
+            if (!clippedStart.isBefore(clippedEnd)) {
+                continue;
+            }
+
+            siteMillis.merge(
+                    interval.site(),
+                    Duration
+                            .between(
+                                    clippedStart,
+                                    clippedEnd
+                            )
+                            .toMillis(),
+                    Long::sum
+            );
+        }
+
         List<SiteUsageResponse> sites =
-                activityLogRepository.findDailyUsage(
-                        dayStart,
-                        dayEnd,
-                        Instant.now()
+                createSiteUsageResponses(
+                        siteMillis
                 );
 
         long totalSeconds = sites.stream()
@@ -147,6 +195,112 @@ public class TrackerService {
                 totalSeconds,
                 sites
         );
+    }
+
+    /**
+     * ミリ秒の端数を決定的に配分し、
+     * サイト合計と全体合計を一致させる。
+     */
+    private List<SiteUsageResponse>
+            createSiteUsageResponses(
+                    Map<String, Long> siteMillis
+            ) {
+        Map<String, Long> siteSeconds =
+                new HashMap<>();
+
+        List<SiteRemainder> remainders =
+                new ArrayList<>();
+
+        long totalMillis = 0;
+        long allocatedSeconds = 0;
+
+        for (Map.Entry<String, Long> entry
+                : siteMillis.entrySet()) {
+            long millis = entry.getValue();
+
+            if (millis <= 0) {
+                continue;
+            }
+
+            long seconds = millis / 1000;
+
+            siteSeconds.put(
+                    entry.getKey(),
+                    seconds
+            );
+
+            remainders.add(
+                    new SiteRemainder(
+                            entry.getKey(),
+                            millis % 1000
+                    )
+            );
+
+            totalMillis += millis;
+            allocatedSeconds += seconds;
+        }
+
+        remainders.sort(
+                Comparator
+                        .comparingLong(
+                                SiteRemainder::remainderMillis
+                        )
+                        .reversed()
+                        .thenComparing(
+                                SiteRemainder::site
+                        )
+        );
+
+        long remainingSeconds =
+                totalMillis / 1000
+                - allocatedSeconds;
+
+        for (int index = 0;
+                index < remainingSeconds;
+                index++) {
+            SiteRemainder remainder =
+                    remainders.get(index);
+
+            siteSeconds.merge(
+                    remainder.site(),
+                    1L,
+                    Long::sum
+            );
+        }
+
+        List<SiteUsageResponse> responses =
+                siteSeconds
+                        .entrySet()
+                        .stream()
+                        .filter(
+                                entry -> entry.getValue() > 0
+                        )
+                        .map(
+                                entry ->
+                                        new SiteUsageResponse(
+                                                entry.getKey(),
+                                                entry.getValue()
+                                        )
+                        )
+                        .sorted(
+                                Comparator
+                                        .comparingLong(
+                                                SiteUsageResponse::seconds
+                                        )
+                                        .reversed()
+                                        .thenComparing(
+                                                SiteUsageResponse::site
+                                        )
+                        )
+                        .toList();
+
+        return List.copyOf(responses);
+    }
+
+    private record SiteRemainder(
+            String site,
+            long remainderMillis
+    ) {
     }
     
     /**
@@ -177,7 +331,7 @@ public class TrackerService {
 
         try {
             int updatedCount =
-                    activityLogRepository.closeOpenActivities(
+                    activityLogRepository.closeAllOpenActivities(
                             endedAt
                     );
 

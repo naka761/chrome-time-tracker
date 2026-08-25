@@ -42,16 +42,21 @@ public class AnalyticsService {
 
     private final ActivityLogRepository activityLogRepository;
     private final SiteCategoryClassifier categoryClassifier;
+    private final ActivityIntervalNormalizer intervalNormalizer;
 
     public AnalyticsService(
             ActivityLogRepository activityLogRepository,
-            SiteCategoryClassifier categoryClassifier
+            SiteCategoryClassifier categoryClassifier,
+            ActivityIntervalNormalizer intervalNormalizer
     ) {
         this.activityLogRepository =
                 activityLogRepository;
 
         this.categoryClassifier =
                 categoryClassifier;
+
+        this.intervalNormalizer =
+                intervalNormalizer;
     }
 
     public AnalyticsResponse getAnalytics(
@@ -165,10 +170,12 @@ public class AnalyticsService {
         );
 
         List<ActivityInterval> intervals =
-                activityLogRepository.findIntervals(
-                        queryStart,
-                        queryEnd,
-                        now
+                intervalNormalizer.normalize(
+                        activityLogRepository.findIntervals(
+                                queryStart,
+                                queryEnd,
+                                now
+                        )
                 );
 
         DayBreakdown dayBreakdown =
@@ -264,9 +271,6 @@ public class AnalyticsService {
             Instant dayEnd,
             ZoneId zoneId
     ) {
-        Map<UsageCategory, Long> categoryMillis =
-                new EnumMap<>(UsageCategory.class);
-
         List<Map<UsageCategory, Long>> hourlyMillis =
                 new ArrayList<>();
 
@@ -311,12 +315,6 @@ public class AnalyticsService {
 
             totalMillis += intervalMillis;
 
-            categoryMillis.merge(
-                    category,
-                    intervalMillis,
-                    Long::sum
-            );
-
             splitIntervalIntoHours(
                     clippedStart,
                     clippedEnd,
@@ -326,34 +324,56 @@ public class AnalyticsService {
             );
         }
 
-        List<CategoryUsageResponse>
-                categoryResponses =
-                createCategoryResponses(
-                        categoryMillis
+        List<Map<UsageCategory, Long>> hourlySeconds =
+                roundHourlyCategoryMillis(
+                        hourlyMillis,
+                        totalMillis
                 );
+
+        Map<UsageCategory, Long> dayCategorySeconds =
+                new EnumMap<>(UsageCategory.class);
 
         List<HourlyUsageResponse>
                 hourlyResponses =
                 new ArrayList<>();
+
+        long dayTotalSeconds = 0;
 
         for (int hour = 0;
                 hour < HOURS_PER_DAY;
                 hour++) {
 
             Map<UsageCategory, Long> hourData =
-                    hourlyMillis.get(hour);
+                    hourlySeconds.get(hour);
 
-            long hourTotalMillis =
+            long hourTotalSeconds =
                     hourData
                             .values()
                             .stream()
                             .mapToLong(Long::longValue)
                             .sum();
 
+            if (hourTotalSeconds > 3600) {
+                throw new IllegalStateException(
+                        "1時間枠の集計が3600秒を超えました。"
+                );
+            }
+
+            hourData.forEach(
+                    (category, seconds) ->
+                            dayCategorySeconds.merge(
+                                    category,
+                                    seconds,
+                                    Long::sum
+                            )
+            );
+
+            dayTotalSeconds += hourTotalSeconds;
+
             hourlyResponses.add(
                     new HourlyUsageResponse(
                             hour,
-                            hourTotalMillis / 1000,
+                            hourTotalSeconds,
                             createCategoryResponses(
                                     hourData
                             )
@@ -361,8 +381,26 @@ public class AnalyticsService {
             );
         }
 
+        if (dayTotalSeconds != totalMillis / 1000) {
+            throw new IllegalStateException(
+                    "日合計と24時間枠の合計が一致しません。"
+            );
+        }
+
+        if (dayTotalSeconds > 86400) {
+            throw new IllegalStateException(
+                    "1日合計が86400秒を超えました。"
+            );
+        }
+
+        List<CategoryUsageResponse>
+                categoryResponses =
+                createCategoryResponses(
+                        dayCategorySeconds
+                );
+
         return new DayBreakdown(
-                totalMillis / 1000,
+                dayTotalSeconds,
                 categoryResponses,
                 hourlyResponses
         );
@@ -416,9 +454,107 @@ public class AnalyticsService {
         }
     }
 
+    /**
+     * 全セルのミリ秒端数を決定的に配分し、
+     * 日合計と時間・カテゴリー合計を一致させる。
+     */
+    private List<Map<UsageCategory, Long>>
+            roundHourlyCategoryMillis(
+                    List<Map<UsageCategory, Long>>
+                            hourlyMillis,
+                    long totalMillis
+            ) {
+        List<Map<UsageCategory, Long>> hourlySeconds =
+                new ArrayList<>();
+
+        List<RoundingCandidate> candidates =
+                new ArrayList<>();
+
+        long allocatedSeconds = 0;
+
+        for (int hour = 0;
+                hour < HOURS_PER_DAY;
+                hour++) {
+            Map<UsageCategory, Long> secondsMap =
+                    new EnumMap<>(UsageCategory.class);
+
+            for (Map.Entry<UsageCategory, Long> entry
+                    : hourlyMillis.get(hour).entrySet()) {
+                long millis = entry.getValue();
+
+                if (millis <= 0) {
+                    continue;
+                }
+
+                long seconds = millis / 1000;
+
+                secondsMap.put(
+                        entry.getKey(),
+                        seconds
+                );
+
+                candidates.add(
+                        new RoundingCandidate(
+                                hour,
+                                entry.getKey(),
+                                millis % 1000
+                        )
+                );
+
+                allocatedSeconds += seconds;
+            }
+
+            hourlySeconds.add(secondsMap);
+        }
+
+        candidates.sort(
+                Comparator
+                        .comparingLong(
+                                RoundingCandidate::remainderMillis
+                        )
+                        .reversed()
+                        .thenComparingInt(
+                                RoundingCandidate::hour
+                        )
+                        .thenComparingInt(
+                                candidate ->
+                                        candidate
+                                                .category()
+                                                .ordinal()
+                        )
+        );
+
+        long remainingSeconds =
+                totalMillis / 1000
+                - allocatedSeconds;
+
+        if (remainingSeconds > candidates.size()) {
+            throw new IllegalStateException(
+                    "秒の端数を配分できません。"
+            );
+        }
+
+        for (int index = 0;
+                index < remainingSeconds;
+                index++) {
+            RoundingCandidate candidate =
+                    candidates.get(index);
+
+            hourlySeconds
+                    .get(candidate.hour())
+                    .merge(
+                            candidate.category(),
+                            1L,
+                            Long::sum
+                    );
+        }
+
+        return hourlySeconds;
+    }
+
     private List<CategoryUsageResponse>
             createCategoryResponses(
-                    Map<UsageCategory, Long> millisMap
+                    Map<UsageCategory, Long> secondsMap
             ) {
         List<CategoryUsageResponse> responses =
                 new ArrayList<>();
@@ -429,13 +565,13 @@ public class AnalyticsService {
         for (UsageCategory category
                 : UsageCategory.values()) {
 
-            long millis =
-                    millisMap.getOrDefault(
+            long seconds =
+                    secondsMap.getOrDefault(
                             category,
                             0L
                     );
 
-            if (millis <= 0) {
+            if (seconds <= 0) {
                 continue;
             }
 
@@ -443,7 +579,7 @@ public class AnalyticsService {
                     new CategoryUsageResponse(
                             category.key(),
                             category.label(),
-                            millis / 1000
+                            seconds
                     )
             );
         }
@@ -1063,6 +1199,13 @@ public class AnalyticsService {
             long totalMillis,
             Map<UsageCategory, Long> categoryMillis,
             Map<String, Long> siteMillis
+    ) {
+    }
+
+    private record RoundingCandidate(
+            int hour,
+            UsageCategory category,
+            long remainderMillis
     ) {
     }
 }
